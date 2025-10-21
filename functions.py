@@ -5,7 +5,13 @@ import difflib
 import numpy as np
 from PIL import Image
 from flask import Flask, request, jsonify, render_template
+import logging
 
+# --- GLOBAL: Load EasyOCR ONCE ---
+# This prevents reloading models on every request (saves huge memory + time)
+logging.info("Loading EasyOCR model (this may take a moment)...")
+reader = easyocr.Reader(['en'], gpu=False)  # Loaded once at startup
+logging.info("EasyOCR model loaded.")
 
 app = Flask(__name__, static_url_path='', static_folder='.')
 
@@ -28,13 +34,13 @@ def find_overlap_text_dual(text_detections, badge_coords, expected_text1, expect
             similarity2 = difflib.SequenceMatcher(None, text.lower(), expected_text2.lower()).ratio()
 
             if similarity1 < similarity_threshold and similarity2 < similarity_threshold:
-                print(f"⚠️ Overlapping text found: '{text}'")
+                logging.warning(f"⚠️ Overlapping text found: '{text}'")
                 safe_margin_flag_foverlap = True
                 overlap_flag = True
                 overlap_text = text
 
     if not overlap_flag:
-        print("✅ No unwanted overlaps detected.")
+        logging.info("✅ No unwanted overlaps detected.")
 
     return safe_margin_flag_foverlap, overlap_flag, overlap_text
 
@@ -49,16 +55,16 @@ def check_safe_margins(text_detections_right, safe_margin_px, right_half_width):
         xs = [pt[0] for pt in bbox]
 
         if any(x < safe_margin_px for x in xs):
-            print(f"⚠️ Text '{text}' violates LEFT margin")
+            logging.warning(f"⚠️ Text '{text}' violates LEFT margin")
             safe_margin_flagged = True
             unsafe_texts.append(text)
         elif any(x > (right_half_width - safe_margin_px) for x in xs):
-            print(f"⚠️ Text '{text}' violates RIGHT margin")
+            logging.warning(f"⚠️ Text '{text}' violates RIGHT margin")
             safe_margin_flagged = True
             unsafe_texts.append(text)
 
     if not safe_margin_flagged:
-        print("✅ All text within safe margins")
+        logging.info("✅ All text within safe margins")
 
     return safe_margin_flagged, unsafe_texts
 
@@ -93,7 +99,6 @@ def comprehensive_image_quality(image_region, expected_width_inches=5, expected_
     if blockiness > 15:
         pixel_status = "Highly Pixelated"
         pixel_score = 0
-
     elif blockiness > 4:
         pixel_status = "Moderately Pixelated"
         pixel_score = 50
@@ -140,14 +145,13 @@ def validate():
     if not file:
         return jsonify({"message": "No file received"}), 400
     try:
-
+        # Read and process image
         image_bytes = file.read()
         img = np.array(Image.open(io.BytesIO(image_bytes)))
-
         height, width = img.shape[:2]
-        right_half = img[0:height, width // 2:width]
+        right_half = img[:, width // 2:]
 
-        reader = easyocr.Reader(['en'], gpu=False)
+        # Use GLOBAL reader (already loaded)
         expected_text1 = "Winner of the 21st Century Emily Dickinson Award"
         expected_text2 = "Award"
 
@@ -176,16 +180,18 @@ def validate():
             'overlap_flag': overlap_flag,
             'overlap_text': overlap_text,
             'safe_margin_flagged': safe_margin_flagged,
-            'unsafe_texts': unsafe_texts, **quality_results,
+            'unsafe_texts': unsafe_texts,
+            **quality_results,
             'overall_assessment': overall_assessment
         })
 
-
-
     except Exception as e:
-        print(f"Error during classification: {str(e)}")
-        return jsonify(result="Error during cover validation")
+        logging.error(f"Error during classification: {str(e)}", exc_info=True)
+        return jsonify(result="Error during cover validation"), 500
 
+
+# --- Required for Render ---
 if __name__ == '__main__':
-    app.run(debug=True)
-
+    import os
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
