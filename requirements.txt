@@ -3,5 +3,4 @@ gunicorn
 opencv-python-headless
 easyocr
 numpy
-Pillow
-pdf2image
+
