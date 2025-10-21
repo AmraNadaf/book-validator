@@ -5,18 +5,8 @@ import difflib
 import numpy as np
 from PIL import Image
 from flask import Flask, request, jsonify, render_template
-import logging
+from pdf2image import convert_from_path
 
-# --- LAZY LOADING: Initialize as None ---
-_reader = None
-
-def get_ocr_reader():
-    global _reader
-    if _reader is None:
-        logging.info("First request: Loading EasyOCR model (this may take 20–60 seconds)...")
-        _reader = easyocr.Reader(['en'], gpu=False)
-        logging.info("EasyOCR model loaded and cached.")
-    return _reader
 
 app = Flask(__name__, static_url_path='', static_folder='.')
 
@@ -39,13 +29,13 @@ def find_overlap_text_dual(text_detections, badge_coords, expected_text1, expect
             similarity2 = difflib.SequenceMatcher(None, text.lower(), expected_text2.lower()).ratio()
 
             if similarity1 < similarity_threshold and similarity2 < similarity_threshold:
-                logging.warning(f"⚠️ Overlapping text found: '{text}'")
+                print(f"⚠️ Overlapping text found: '{text}'")
                 safe_margin_flag_foverlap = True
                 overlap_flag = True
                 overlap_text = text
 
     if not overlap_flag:
-        logging.info("✅ No unwanted overlaps detected.")
+        print("✅ No unwanted overlaps detected.")
 
     return safe_margin_flag_foverlap, overlap_flag, overlap_text
 
@@ -60,16 +50,16 @@ def check_safe_margins(text_detections_right, safe_margin_px, right_half_width):
         xs = [pt[0] for pt in bbox]
 
         if any(x < safe_margin_px for x in xs):
-            logging.warning(f"⚠️ Text '{text}' violates LEFT margin")
+            print(f"⚠️ Text '{text}' violates LEFT margin")
             safe_margin_flagged = True
             unsafe_texts.append(text)
         elif any(x > (right_half_width - safe_margin_px) for x in xs):
-            logging.warning(f"⚠️ Text '{text}' violates RIGHT margin")
+            print(f"⚠️ Text '{text}' violates RIGHT margin")
             safe_margin_flagged = True
             unsafe_texts.append(text)
 
     if not safe_margin_flagged:
-        logging.info("✅ All text within safe margins")
+        print("✅ All text within safe margins")
 
     return safe_margin_flagged, unsafe_texts
 
@@ -104,6 +94,7 @@ def comprehensive_image_quality(image_region, expected_width_inches=5, expected_
     if blockiness > 15:
         pixel_status = "Highly Pixelated"
         pixel_score = 0
+
     elif blockiness > 4:
         pixel_status = "Moderately Pixelated"
         pixel_score = 50
@@ -150,15 +141,25 @@ def validate():
     if not file:
         return jsonify({"message": "No file received"}), 400
     try:
-        # Read image
-        image_bytes = file.read()
-        img = np.array(Image.open(io.BytesIO(image_bytes)))
+        # Get the file extension
+        filename = file.filename
+        file_ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+
+        # Handle based on file type
+        if file_ext == 'pdf':
+            # Convert PDF to image
+            pages = convert_from_path(file, dpi=300)
+            img = np.array(pages[0])  # Get first page
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        else:
+            # Handle as regular image
+            image_bytes = file.read()
+            img = np.array(Image.open(io.BytesIO(image_bytes)))
+
         height, width = img.shape[:2]
-        right_half = img[:, width // 2:]
+        right_half = img[0:height, width // 2:width]
 
-        # Lazy-load OCR reader
-        reader = get_ocr_reader()
-
+        reader = easyocr.Reader(['en'], gpu=False)
         expected_text1 = "Winner of the 21st Century Emily Dickinson Award"
         expected_text2 = "Award"
 
@@ -187,18 +188,15 @@ def validate():
             'overlap_flag': overlap_flag,
             'overlap_text': overlap_text,
             'safe_margin_flagged': safe_margin_flagged,
-            'unsafe_texts': unsafe_texts,
-            **quality_results,
+            'unsafe_texts': unsafe_texts, **quality_results,
             'overall_assessment': overall_assessment
         })
 
+
+
     except Exception as e:
-        logging.error(f"Error during classification: {str(e)}", exc_info=True)
-        return jsonify(result="Error during cover validation"), 500
+        print(f"Error during classification: {str(e)}")
+        return jsonify(result="Error during cover validation")
 
-
-# --- Required for Render ---
 if __name__ == '__main__':
-    import os
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(debug=True)
