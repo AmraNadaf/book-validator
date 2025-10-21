@@ -5,7 +5,6 @@ import difflib
 import numpy as np
 from PIL import Image
 from flask import Flask, request, jsonify, render_template
-from pdf2image import convert_from_path
 
 
 app = Flask(__name__, static_url_path='', static_folder='.')
@@ -141,20 +140,9 @@ def validate():
     if not file:
         return jsonify({"message": "No file received"}), 400
     try:
-        # Get the file extension
-        filename = file.filename
-        file_ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
 
-        # Handle based on file type
-        if file_ext == 'pdf':
-            # Convert PDF to image
-            pages = convert_from_path(file, dpi=300)
-            img = np.array(pages[0])  # Get first page
-            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        else:
-            # Handle as regular image
-            image_bytes = file.read()
-            img = np.array(Image.open(io.BytesIO(image_bytes)))
+        image_bytes = file.read()
+        img = np.array(Image.open(io.BytesIO(image_bytes)))
 
         height, width = img.shape[:2]
         right_half = img[0:height, width // 2:width]
@@ -200,3 +188,4 @@ def validate():
 
 if __name__ == '__main__':
     app.run(debug=True)
+
