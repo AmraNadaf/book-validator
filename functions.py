@@ -7,11 +7,16 @@ from PIL import Image
 from flask import Flask, request, jsonify, render_template
 import logging
 
-# --- GLOBAL: Load EasyOCR ONCE ---
-# This prevents reloading models on every request (saves huge memory + time)
-logging.info("Loading EasyOCR model (this may take a moment)...")
-reader = easyocr.Reader(['en'], gpu=False)  # Loaded once at startup
-logging.info("EasyOCR model loaded.")
+# --- LAZY LOADING: Initialize as None ---
+_reader = None
+
+def get_ocr_reader():
+    global _reader
+    if _reader is None:
+        logging.info("First request: Loading EasyOCR model (this may take 20–60 seconds)...")
+        _reader = easyocr.Reader(['en'], gpu=False)
+        logging.info("EasyOCR model loaded and cached.")
+    return _reader
 
 app = Flask(__name__, static_url_path='', static_folder='.')
 
@@ -145,13 +150,15 @@ def validate():
     if not file:
         return jsonify({"message": "No file received"}), 400
     try:
-        # Read and process image
+        # Read image
         image_bytes = file.read()
         img = np.array(Image.open(io.BytesIO(image_bytes)))
         height, width = img.shape[:2]
         right_half = img[:, width // 2:]
 
-        # Use GLOBAL reader (already loaded)
+        # Lazy-load OCR reader
+        reader = get_ocr_reader()
+
         expected_text1 = "Winner of the 21st Century Emily Dickinson Award"
         expected_text2 = "Award"
 
